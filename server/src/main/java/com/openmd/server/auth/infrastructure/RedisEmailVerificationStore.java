@@ -49,7 +49,7 @@ public class RedisEmailVerificationStore implements EmailVerificationStore {
 
 	@Override
 	public IssueResult issue(
-		long userId,
+		String emailKey,
 		String digest,
 		Instant now,
 		Duration ttl,
@@ -59,7 +59,7 @@ public class RedisEmailVerificationStore implements EmailVerificationStore {
 		long nowMillis = now.toEpochMilli();
 		Long result = redisTemplate.execute(
 			ISSUE_SCRIPT,
-			List.of(key(userId)),
+			List.of(key(emailKey)),
 			digest,
 			Long.toString(nowMillis),
 			Long.toString(nowMillis + resendCooldown.toMillis()),
@@ -70,8 +70,8 @@ public class RedisEmailVerificationStore implements EmailVerificationStore {
 	}
 
 	@Override
-	public VerificationResult verify(long userId, String digest) {
-		Long result = redisTemplate.execute(VERIFY_SCRIPT, List.of(key(userId)), digest);
+	public VerificationResult verify(String emailKey, String digest) {
+		Long result = redisTemplate.execute(VERIFY_SCRIPT, List.of(key(emailKey)), digest);
 		if (result != null && result == 1) {
 			return VerificationResult.MATCHED;
 		}
@@ -82,17 +82,17 @@ public class RedisEmailVerificationStore implements EmailVerificationStore {
 	}
 
 	@Override
-	public boolean cancelIssue(long userId, String digest) {
-		Long result = redisTemplate.execute(CANCEL_ISSUE_SCRIPT, List.of(key(userId)), digest);
+	public boolean cancelIssue(String emailKey, String digest) {
+		Long result = redisTemplate.execute(CANCEL_ISSUE_SCRIPT, List.of(key(emailKey)), digest);
 		return result != null && result == 1;
 	}
 
 	@Override
-	public void consume(long userId) {
-		redisTemplate.delete(key(userId));
+	public void consume(String emailKey) {
+		redisTemplate.delete(key(emailKey));
 	}
 
-	static String key(long userId) {
-		return "auth:email-verification:user:{" + userId + "}";
+	static String key(String emailKey) {
+		return "auth:email-verification:email:{" + emailKey + "}";
 	}
 }

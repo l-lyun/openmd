@@ -13,6 +13,7 @@ import com.openmd.server.auth.api.BrowserAuthController;
 import com.openmd.server.auth.api.BrowserRefreshCookie;
 import com.openmd.server.auth.api.UserController;
 import com.openmd.server.auth.application.AuthService;
+import com.openmd.server.auth.application.TwoStepSignUpService;
 import com.openmd.server.auth.config.SecurityConfiguration;
 import com.openmd.server.auth.security.AccessTokenService;
 import com.openmd.server.learningmaterial.api.LearningMaterialController;
@@ -46,6 +47,7 @@ class OpenApiContractTest {
 
 	@Autowired MockMvc mockMvc;
 	@MockitoBean AuthService authService;
+	@MockitoBean TwoStepSignUpService signUpService;
 	@MockitoBean AccessTokenService accessTokenService;
 	@MockitoBean BrowserRefreshCookie browserRefreshCookie;
 	@MockitoBean LearningMaterialService learningMaterialService;
@@ -72,15 +74,20 @@ class OpenApiContractTest {
 			.andExpect(jsonPath("$.components.securitySchemes.bearerAuth.type").value("http"))
 			.andExpect(jsonPath("$.components.securitySchemes.bearerAuth.scheme").value("bearer"))
 			.andExpect(jsonPath("$.security[0].bearerAuth").isArray())
-			.andExpect(jsonPath("$.paths['/api/v1/auth/sign-ups'].post.operationId").value("requestSignUp"))
+			.andExpect(jsonPath("$.paths['/api/v1/auth/sign-ups'].post.operationId").value("completeSignUp"))
 			.andExpect(jsonPath("$.paths['/api/v1/auth/sign-ups'].post.security").isEmpty())
-			.andExpect(jsonPath("$.paths['/api/v1/auth/sign-ups'].post.responses['202']").exists())
+			.andExpect(jsonPath("$.paths['/api/v1/auth/sign-ups'].post.responses['201']").exists())
+			.andExpect(jsonPath("$.paths['/api/v1/auth/sign-ups'].post.requestBody.content"
+				+ ".['application/json'].schema.$ref").value("#/components/schemas/SignUpRequest"))
 			.andExpect(jsonPath("$.paths['/api/v1/auth/email-verifications'].post.operationId")
-				.value("resendEmailVerification"))
+				.value("requestEmailVerification"))
 			.andExpect(jsonPath("$.paths['/api/v1/auth/email-verifications'].post.security").isEmpty())
 			.andExpect(jsonPath("$.paths['/api/v1/auth/email-verifications/confirm'].post.operationId")
 				.value("confirmEmailVerification"))
 			.andExpect(jsonPath("$.paths['/api/v1/auth/email-verifications/confirm'].post.security").isEmpty())
+			.andExpect(jsonPath("$.paths['/api/v1/auth/nickname-availability'].post.operationId")
+				.value("checkNicknameAvailability"))
+			.andExpect(jsonPath("$.paths['/api/v1/auth/nickname-availability'].post.security").isEmpty())
 			.andExpect(jsonPath("$.paths['/api/v1/auth/sessions'].post.operationId").value("createSession"))
 			.andExpect(jsonPath("$.paths['/api/v1/auth/sessions'].post.security").isEmpty())
 			.andExpect(jsonPath("$.paths['/api/v1/auth/sessions'].post.responses['200'].content"
@@ -102,6 +109,7 @@ class OpenApiContractTest {
 				+ ".['application/json'].schema.$ref").value("#/components/schemas/RefreshTokenRequest"))
 			.andExpect(jsonPath("$.paths['/api/v1/users/me'].get.operationId").value("getCurrentUser"))
 			.andExpect(jsonPath("$.paths['/api/v1/users/me'].get.security").doesNotExist())
+			.andExpect(jsonPath("$.components.schemas.CurrentUser.properties.nickname.type").value("string"))
 			.andExpect(jsonPath("$.paths['/api/v1/learning-materials'].post.operationId")
 				.value("createLearningMaterial"))
 			.andExpect(jsonPath("$.paths['/api/v1/learning-materials'].post.security[0].bearerAuth")
@@ -135,6 +143,11 @@ class OpenApiContractTest {
 			.andExpect(jsonPath("$.components.securitySchemes.browserRefreshCookie.name").value("openmd_refresh"))
 			.andExpect(jsonPath("$.paths['/api/v1/auth/web/sessions'].post.operationId")
 				.value("createBrowserSession"))
+			.andExpect(jsonPath("$.paths['/api/v1/auth/web/sign-ups'].post.operationId")
+				.value("completeBrowserSignUp"))
+			.andExpect(jsonPath("$.paths['/api/v1/auth/web/sign-ups'].post.responses['201'].content"
+				+ ".['application/json'].schema.$ref")
+				.value("#/components/schemas/ApiResponseBrowserSessionTokens"))
 			.andExpect(jsonPath("$.paths['/api/v1/auth/web/sessions'].post.responses['200'].content"
 				+ ".['application/json'].schema.$ref")
 				.value("#/components/schemas/ApiResponseBrowserSessionTokens"))

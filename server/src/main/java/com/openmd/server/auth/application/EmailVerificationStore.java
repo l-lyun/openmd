@@ -5,13 +5,13 @@ import java.time.Instant;
 
 public interface EmailVerificationStore {
 
-	IssueResult issue(long userId, String digest, Instant now, Duration ttl, Duration resendCooldown, boolean enforceCooldown);
+	IssueResult issue(String emailKey, String digest, Instant now, Duration ttl, Duration resendCooldown, boolean enforceCooldown);
 
-	VerificationResult verify(long userId, String digest);
+	VerificationResult verify(String emailKey, String digest);
 
-	boolean cancelIssue(long userId, String digest);
+	boolean cancelIssue(String emailKey, String digest);
 
-	void consume(long userId);
+	void consume(String emailKey);
 
 	record IssueResult(boolean issued, long retryAfterSeconds) {
 		public static IssueResult success() { return new IssueResult(true, 0); }

@@ -20,6 +20,7 @@ public final class BrowserSessionRequestGuard extends OncePerRequestFilter {
 	public static final String CSRF_HEADER = "X-OpenMD-CSRF";
 	private static final String CSRF_VALUE = "1";
 	private static final String LOGIN_PATH = "/api/v1/auth/web/sessions";
+	private static final String SIGN_UP_PATH = "/api/v1/auth/web/sign-ups";
 	private static final String REFRESH_PATH = "/api/v1/auth/web/sessions/refresh";
 	private static final String LOGOUT_PATH = "/api/v1/auth/web/sessions/current";
 
@@ -35,7 +36,7 @@ public final class BrowserSessionRequestGuard extends OncePerRequestFilter {
 	protected boolean shouldNotFilter(HttpServletRequest request) {
 		String method = request.getMethod();
 		String path = request.getRequestURI().substring(request.getContextPath().length());
-		return !("POST".equals(method) && (LOGIN_PATH.equals(path) || REFRESH_PATH.equals(path)))
+		return !("POST".equals(method) && (SIGN_UP_PATH.equals(path) || LOGIN_PATH.equals(path) || REFRESH_PATH.equals(path)))
 			&& !("DELETE".equals(method) && LOGOUT_PATH.equals(path));
 	}
 

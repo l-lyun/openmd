@@ -17,6 +17,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Configuration
 @ConditionalOnProperty(name = "openmd.auth.enabled", havingValue = "true", matchIfMissing = true)
@@ -52,6 +54,7 @@ public class AuthConfiguration {
 	}
 
 	@Bean EmailVerificationStore emailVerificationStore(StringRedisTemplate redis) { return new RedisEmailVerificationStore(redis); }
+	@Bean SignUpCredentialStore signUpCredentialStore(StringRedisTemplate redis) { return new RedisSignUpCredentialStore(redis); }
 	@Bean RefreshSessionStore refreshSessionStore(StringRedisTemplate redis) { return new RedisRefreshSessionStore(redis); }
 
 	@Bean
@@ -85,15 +88,27 @@ public class AuthConfiguration {
 	AuthService authService(
 		UserRepository users,
 		PasswordEncoder passwordEncoder,
+		RefreshTokenService refreshTokens,
+		AccessTokenService accessTokens
+	) {
+		return new AuthService(users, passwordEncoder, refreshTokens, accessTokens);
+	}
+
+	@Bean
+	TwoStepSignUpService twoStepSignUpService(
+		UserRepository users,
+		PasswordEncoder passwordEncoder,
 		VerificationCodeGenerator generator,
 		VerificationCodeDigest digest,
 		EmailVerificationStore verifications,
+		SignUpCredentialStore credentials,
 		VerificationEmailSender emailSender,
 		RefreshTokenService refreshTokens,
 		AccessTokenService accessTokens,
-		Clock clock
+		Clock clock,
+		PlatformTransactionManager transactionManager
 	) {
-		return new AuthService(users, passwordEncoder, generator, digest, verifications, emailSender,
-			refreshTokens, accessTokens, clock);
+		return new TwoStepSignUpService(users, passwordEncoder, generator, digest, verifications, credentials,
+			emailSender, refreshTokens, accessTokens, clock, new TransactionTemplate(transactionManager));
 	}
 }

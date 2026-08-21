@@ -12,7 +12,8 @@ public enum AuthErrorCode implements ErrorCode {
 	INVALID_CREDENTIAL(HttpStatus.UNAUTHORIZED, "AUTH_005", "인증 정보가 유효하지 않습니다."),
 	ACCOUNT_UNAVAILABLE(HttpStatus.FORBIDDEN, "AUTH_006", "이 계정으로 로그인할 수 없습니다."),
 	TOO_MANY_REQUESTS(HttpStatus.TOO_MANY_REQUESTS, "AUTH_007", "잠시 후 다시 시도해 주세요."),
-	EMAIL_DELIVERY_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "AUTH_008", "인증 메일을 보낼 수 없습니다.");
+	EMAIL_DELIVERY_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "AUTH_008", "인증 메일을 보낼 수 없습니다."),
+	NICKNAME_CONFLICT(HttpStatus.CONFLICT, "AUTH_010", "이미 사용 중인 닉네임입니다.");
 
 	private final HttpStatus status;
 	private final String code;

@@ -19,8 +19,11 @@ class RedisKeyContractTest {
 	}
 
 	@Test
-	void emailVerificationKeyContainsOnlyTheInternalUserId() {
-		assertEquals("auth:email-verification:user:{42}", RedisEmailVerificationStore.key(42L));
+	void emailVerificationKeyContainsOnlyTheKeyedEmailDigest() {
+		assertEquals(
+			"auth:email-verification:email:{digest42}",
+			RedisEmailVerificationStore.key("digest42")
+		);
 	}
 
 	@Test
@@ -47,6 +50,10 @@ class RedisKeyContractTest {
 		String cancellationScript = RedisEmailVerificationStore.CANCEL_ISSUE_SCRIPT.getScriptAsString();
 		assertTrue(cancellationScript.contains("codeDigest') == ARGV[1]"));
 		assertTrue(cancellationScript.contains("DEL"));
+
+		String signUpCredentialSaveScript = RedisSignUpCredentialStore.SAVE_SCRIPT.getScriptAsString();
+		assertTrue(signUpCredentialSaveScript.contains("HSET"));
+		assertTrue(signUpCredentialSaveScript.contains("PEXPIRE"));
 	}
 
 	private String hashTag(String key) {

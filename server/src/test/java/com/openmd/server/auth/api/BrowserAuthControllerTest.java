@@ -16,6 +16,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.openmd.server.auth.application.AuthService;
 import com.openmd.server.auth.application.SessionTokens;
+import com.openmd.server.auth.application.TwoStepSignUpService;
 import com.openmd.server.auth.domain.AuthErrorCode;
 import com.openmd.server.global.error.BusinessException;
 import com.openmd.server.global.error.GlobalExceptionHandler;
@@ -36,6 +37,7 @@ class BrowserAuthControllerTest {
 	private static final Instant ACCESS_EXPIRES_AT = Instant.parse("2026-08-20T00:05:00Z");
 	private static final Instant REFRESH_EXPIRES_AT = Instant.parse("2026-09-19T00:00:00Z");
 	private final AuthService authService = org.mockito.Mockito.mock(AuthService.class);
+	private final TwoStepSignUpService signUpService = org.mockito.Mockito.mock(TwoStepSignUpService.class);
 	private MockMvc mockMvc;
 
 	@BeforeEach
@@ -47,9 +49,35 @@ class BrowserAuthControllerTest {
 			"/",
 			Clock.fixed(NOW, ZoneOffset.UTC)
 		);
-		mockMvc = MockMvcBuilders.standaloneSetup(new BrowserAuthController(authService, refreshCookie))
+		mockMvc = MockMvcBuilders.standaloneSetup(new BrowserAuthController(authService, signUpService, refreshCookie))
 			.setControllerAdvice(new GlobalExceptionHandler())
 			.build();
+	}
+
+	@Test
+	void signUpReturnsCreatedAccessMetadataAndRefreshTokenOnlyAsHttpOnlyCookie() throws Exception {
+		when(signUpService.completeSignUp(org.mockito.ArgumentMatchers.any()))
+			.thenReturn(tokens("access-token", "refresh-token"));
+
+		mockMvc.perform(post("/api/v1/auth/web/sign-ups")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{
+					  "signUpToken":"61d67fa8-1a2b-4f35-94fc-16ec63551b15",
+					  "password":"password1",
+					  "nickname":"공부왕7",
+					  "agreements":[
+					    {"termsId":"SERVICE_TERMS","version":"TEMP-2026-08-20"},
+					    {"termsId":"PRIVACY_COLLECTION","version":"TEMP-2026-08-20"}
+					  ]
+					}
+					"""))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.data.accessToken").value("access-token"))
+			.andExpect(jsonPath("$.data.refreshToken").doesNotExist())
+			.andExpect(content().string(not(containsString("refresh-token"))))
+			.andExpect(header().string(HttpHeaders.SET_COOKIE, containsString("openmd_refresh=refresh-token")))
+			.andExpect(header().string(HttpHeaders.SET_COOKIE, containsString("HttpOnly")));
 	}
 
 	@Test

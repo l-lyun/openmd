@@ -1,7 +1,10 @@
 package com.openmd.server.auth.api;
 
 import com.openmd.server.auth.application.AuthService;
+import com.openmd.server.auth.application.IssuedSignUpToken;
+import com.openmd.server.auth.application.NicknameAvailability;
 import com.openmd.server.auth.application.SessionTokens;
+import com.openmd.server.auth.application.TwoStepSignUpService;
 import com.openmd.server.global.api.ApiResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -24,35 +27,36 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
 	private final AuthService authService;
+	private final TwoStepSignUpService signUpService;
 
-	public AuthController(AuthService authService) {
+	public AuthController(AuthService authService, TwoStepSignUpService signUpService) {
 		this.authService = authService;
+		this.signUpService = signUpService;
 	}
 
 	@PostMapping("/sign-ups")
 	@Operation(
-		operationId = "requestSignUp",
-		summary = "이메일 회원가입을 요청한다",
+		operationId = "completeSignUp",
+		summary = "네이티브 회원가입을 완료하고 세션을 발급한다",
 		responses = @io.swagger.v3.oas.annotations.responses.ApiResponse(
-			responseCode = "202", description = "가입 요청 접수", useReturnTypeSchema = true
+			responseCode = "201", description = "가입 완료", useReturnTypeSchema = true
 		)
 	)
-	public ResponseEntity<ApiResponse<VerificationRequiredResponse>> signUp(@Valid @RequestBody SignUpRequest request) {
-		authService.signUp(request.email(), request.password());
-		return ResponseEntity.status(HttpStatus.ACCEPTED)
-			.body(ApiResponse.success(new VerificationRequiredResponse(true)));
+	public ResponseEntity<ApiResponse<SessionTokens>> signUp(@Valid @RequestBody SignUpRequest request) {
+		return ResponseEntity.status(HttpStatus.CREATED)
+			.body(ApiResponse.success(signUpService.completeSignUp(request.toCommand())));
 	}
 
 	@PostMapping("/email-verifications")
 	@Operation(
-		operationId = "resendEmailVerification",
-		summary = "이메일 인증 코드를 다시 요청한다",
+		operationId = "requestEmailVerification",
+		summary = "가입용 이메일 인증 코드를 요청하거나 다시 요청한다",
 		responses = @io.swagger.v3.oas.annotations.responses.ApiResponse(
 			responseCode = "202", description = "재발송 요청 접수", useReturnTypeSchema = true
 		)
 	)
 	public ResponseEntity<ApiResponse<VerificationRequiredResponse>> resend(@Valid @RequestBody EmailRequest request) {
-		authService.resend(request.email());
+		signUpService.requestEmailVerification(request.email());
 		return ResponseEntity.status(HttpStatus.ACCEPTED)
 			.body(ApiResponse.success(new VerificationRequiredResponse(true)));
 	}
@@ -60,8 +64,16 @@ public class AuthController {
 	@PostMapping("/email-verifications/confirm")
 	@Operation(operationId = "confirmEmailVerification", summary = "이메일 인증 코드를 확인한다")
 	public ApiResponse<EmailVerifiedResponse> confirm(@Valid @RequestBody EmailVerificationConfirmRequest request) {
-		authService.confirm(request.email(), request.code());
-		return ApiResponse.success(new EmailVerifiedResponse(true, "LOGIN"));
+		IssuedSignUpToken issued = signUpService.confirmEmail(request.email(), request.code());
+		return ApiResponse.success(new EmailVerifiedResponse(true, issued.token(), "COMPLETE_PROFILE"));
+	}
+
+	@PostMapping("/nickname-availability")
+	@Operation(operationId = "checkNicknameAvailability", summary = "닉네임 사용 가능 여부를 확인한다")
+	public ApiResponse<NicknameAvailability> nicknameAvailability(
+		@Valid @RequestBody NicknameAvailabilityRequest request
+	) {
+		return ApiResponse.success(signUpService.nicknameAvailability(request.nickname()));
 	}
 
 	@PostMapping("/sessions")

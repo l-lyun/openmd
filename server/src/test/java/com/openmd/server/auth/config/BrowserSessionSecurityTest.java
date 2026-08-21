@@ -11,6 +11,7 @@ import com.openmd.server.auth.api.BrowserAuthController;
 import com.openmd.server.auth.api.BrowserRefreshCookie;
 import com.openmd.server.auth.application.AuthService;
 import com.openmd.server.auth.application.SessionTokens;
+import com.openmd.server.auth.application.TwoStepSignUpService;
 import com.openmd.server.auth.security.AccessTokenService;
 import com.openmd.server.global.error.GlobalExceptionHandler;
 import java.time.Clock;
@@ -47,6 +48,7 @@ class BrowserSessionSecurityTest {
 
 	@Autowired MockMvc mockMvc;
 	@MockitoBean AuthService authService;
+	@MockitoBean TwoStepSignUpService signUpService;
 	@MockitoBean AccessTokenService accessTokenService;
 
 	@SpringBootConfiguration
@@ -78,6 +80,18 @@ class BrowserSessionSecurityTest {
 			.andExpect(jsonPath("$.error.code").value("AUTH_009"));
 
 		verifyNoInteractions(authService);
+	}
+
+	@Test
+	void rejectsMissingCsrfHeaderBeforeBrowserSignUpServiceIsCalled() throws Exception {
+		mockMvc.perform(post("/api/v1/auth/web/sign-ups")
+				.header(HttpHeaders.ORIGIN, "http://localhost:5173")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(validSignUp()))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.error.code").value("AUTH_009"));
+
+		verifyNoInteractions(signUpService);
 	}
 
 	@Test
@@ -154,9 +168,46 @@ class BrowserSessionSecurityTest {
 			.andExpect(jsonPath("$.data.refreshToken").doesNotExist());
 	}
 
+	@Test
+	void allowsBrowserSignUpOnlyWithExactOriginAndFixedCsrfHeader() throws Exception {
+		when(signUpService.completeSignUp(org.mockito.ArgumentMatchers.any()))
+			.thenReturn(new SessionTokens(
+				"access-token",
+				Instant.parse("2026-08-20T00:05:00Z"),
+				"refresh-token",
+				Instant.parse("2026-09-19T00:00:00Z")
+			));
+
+		mockMvc.perform(post("/api/v1/auth/web/sign-ups")
+				.header(HttpHeaders.ORIGIN, "http://localhost:5173")
+				.header("X-OpenMD-CSRF", "1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(validSignUp()))
+			.andExpect(status().isCreated())
+			.andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "http://localhost:5173"))
+			.andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"))
+			.andExpect(header().string(HttpHeaders.SET_COOKIE, org.hamcrest.Matchers.containsString("HttpOnly")))
+			.andExpect(jsonPath("$.data.accessToken").value("access-token"))
+			.andExpect(jsonPath("$.data.refreshToken").doesNotExist());
+	}
+
 	private String validLogin() {
 		return """
 			{"email":"learner@example.com","password":"password1"}
+			""";
+	}
+
+	private String validSignUp() {
+		return """
+			{
+			  "signUpToken":"61d67fa8-1a2b-4f35-94fc-16ec63551b15",
+			  "password":"password1",
+			  "nickname":"공부왕7",
+			  "agreements":[
+			    {"termsId":"SERVICE_TERMS","version":"TEMP-2026-08-20"},
+			    {"termsId":"PRIVACY_COLLECTION","version":"TEMP-2026-08-20"}
+			  ]
+			}
 			""";
 	}
 }

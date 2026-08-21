@@ -7,23 +7,23 @@
 
 ## 목적과 경계
 
-이메일·비밀번호 인증과 가입 완료에 필요한 사용자, 고유 닉네임과 필수 약관 동의 이력의 데이터 의미를 정의한다. 이메일 인증 코드, 가입 계속 자격과 Refresh Token 상태는 Redis에 TTL로 관리한다.
+이메일·비밀번호 인증과 가입 완료에 필요한 사용자, 고유 닉네임과 필수 약관 동의 기록의 데이터 의미를 정의한다. 이메일 인증 코드, 가입 계속 자격과 Refresh Token 상태는 Redis에 TTL로 관리한다.
 
-현재 서버에는 닉네임·약관 이력과 가입 계속 자격이 없으며 이메일 인증 완료 시 바로 사용자를 활성화한다. 아래 닉네임·약관·2단계 상태는 2026-08-20 승인된 목표 계약으로, 서버 마이그레이션 전에는 구현된 사실로 간주하지 않는다.
+현재 서버는 이메일 인증 중 사용자 행을 만들지 않고 Redis 가입 계속 자격을 거쳐 최종 가입에서 닉네임·약관 동의가 포함된 `ACTIVE` 사용자 행을 생성한다. V3 이전 기존 행은 확인되지 않은 닉네임·동의를 임의로 채우지 않아 새 컬럼이 null일 수 있으며, 신규 가입 불변식과 물리적 `NOT NULL` 전환 단계를 구분한다.
 
 ## 확정된 의미 규칙
 
 - `users.id`는 OpenMD 계정과 사용자 소유 데이터를 식별하는 내부 키다. 이메일이나 향후 소셜 식별자를 소유 데이터의 키로 사용하지 않는다.
 - 초기 로그인 아이디는 정규화 이메일이며 전역에서 유일하다.
-- 활성 사용자의 닉네임은 전역에서 유일하며, 표시 값과 영문 대소문자를 구분하지 않는 비교용 정규화 값을 분리한다.
+- 활성 사용자의 닉네임은 NFC로 정규화한 단일 표시 값을 저장하며, 대소문자를 구분하지 않는 DB 비교와 `UNIQUE` 제약으로 전역 고유성을 보장한다.
 - 비밀번호 원문, 6자리 인증 코드 원문, Refresh Token 원문은 DB·Redis·로그에 저장하지 않는다.
-- 필수 약관 동의는 동의 시점의 약관 식별자와 버전별 이력으로 남긴다. 법률 검토 전 `MVP_PLACEHOLDER` 버전은 운영 약관 확정본으로 간주하지 않는다.
+- 필수 서비스 이용약관과 개인정보 수집·이용 동의는 각각 동의 시점의 버전과 동의 시각을 사용자 행에 남긴다. 법률 검토 전 `TEMP-2026-08-20` 버전은 운영 약관 확정본으로 간주하지 않는다.
 - 소셜 제공자가 반환한 이메일이 기존 계정 이메일과 같다는 이유만으로 계정을 자동 연결하거나 병합하지 않는다.
 
 ## 관계 개요
 
 ```text
-목표: users 1 ── N user_term_agreements
+목표: users 단일 행에 로컬 가입 정보와 두 필수 약관 동의 기록
 향후 소셜 로그인 승인 시: users 1 ── N social_accounts
 Redis: 이메일 인증 상태 + 가입 계속 자격 + Refresh Token session/family 상태
 ```
@@ -39,11 +39,14 @@ Redis: 이메일 인증 상태 + 가입 계속 자격 + Refresh Token session/fa
 | `id` | `BIGINT` | 아니요 | PK, identity; 현재 `BaseEntity`와 일치 |
 | `email` | `VARCHAR(320)` | 아니요 | 표시·메일 발송용 입력 값 |
 | `normalized_email` | `VARCHAR(320)` | 아니요 | 로그인·중복 비교 값, `UNIQUE` |
-| `password_hash` | `VARCHAR(255)` | 가입 대기 중 예 | 이메일 가입 완료 시 Argon2id 해시 필수; 향후 소셜 전용 사용자는 별도 불변식 필요 |
-| `nickname` | `VARCHAR(10)` 또는 동등한 유니코드 안전 타입 | 가입 대기 중 예 | 활성 사용자 표시 값, 화면상 2~10자 |
-| `normalized_nickname` | 유니코드 안전 문자열 | 가입 대기 중 예 | 한글 표현 정규화와 영문 대소문자 무시 비교 값, `UNIQUE` |
-| `email_verified_at` | `TIMESTAMP(6)` | 예 | null이면 이메일 미인증 |
-| `status` | `VARCHAR(32)` | 아니요 | 제공자 중립 상태 `PENDING_ACTIVATION`, `ACTIVE`, `SUSPENDED`, `WITHDRAWN` |
+| `password_hash` | `VARCHAR(255)` | 아니요 | 최종 가입 요청의 비밀번호를 Argon2id로 해시 |
+| `nickname` | `VARCHAR(10)` 또는 동등한 유니코드 안전 타입 | 신규 가입 아니요; 전환 전 기존 행 예 | NFC 정규화한 표시 값, 화면상 2~10자, case-insensitive `UNIQUE` |
+| `email_verified_at` | `TIMESTAMP(6)` | 신규 가입 아니요; 기존 상태에 따라 예 | `signUpToken`에 결합된 이메일 인증 시각 |
+| `service_terms_version` | `VARCHAR(64)` | 신규 가입 아니요; 전환 전 기존 행 예 | 가입 시 동의한 서비스 이용약관 버전 |
+| `service_terms_agreed_at` | `TIMESTAMP(6)` | 신규 가입 아니요; 전환 전 기존 행 예 | 서비스 이용약관 동의 확정 시각 |
+| `privacy_terms_version` | `VARCHAR(64)` | 신규 가입 아니요; 전환 전 기존 행 예 | 가입 시 동의한 개인정보 수집·이용 버전 |
+| `privacy_terms_agreed_at` | `TIMESTAMP(6)` | 신규 가입 아니요; 전환 전 기존 행 예 | 개인정보 수집·이용 동의 확정 시각 |
+| `status` | `VARCHAR(32)` | 아니요 | 새 이메일 가입은 `ACTIVE`로 생성; 이후 `SUSPENDED`, `WITHDRAWN` 전이 |
 | `activated_at` | `TIMESTAMP(6)` | 예 | 최초 활성화 시각 |
 | `suspended_at` | `TIMESTAMP(6)` | 예 | 정지 상태일 때 설정 |
 | `withdrawn_at` | `TIMESTAMP(6)` | 예 | 탈퇴 처리 시각; 삭제 정책 확정 전 물리 삭제 금지 |
@@ -53,51 +56,39 @@ Redis: 이메일 인증 상태 + 가입 계속 자격 + Refresh Token session/fa
 제안 제약·인덱스:
 
 - `UNIQUE(normalized_email)`로 정규화 이메일 중복을 DB에서도 차단한다.
-- `UNIQUE(normalized_nickname)`로 동시 최종 제출에서도 닉네임 중복을 차단한다. 사전 중복 확인은 예약이 아니므로 이 제약을 대체하지 않는다.
+- `nickname` 저장 전 NFC 정규화를 적용하고 case-insensitive collation의 `UNIQUE(nickname)`으로 동시 최종 제출에서도 중복을 차단한다. 사전 중복 확인은 예약이 아니므로 이 제약을 대체하지 않는다.
 - `nickname`은 화면에 보이는 글자 기준 2~10자이고 공백 없이 한글·영문·숫자만 허용한다. 특수문자와 이모지는 허용하지 않는다. 정확한 DB 길이는 문자셋과 grapheme 처리 검증 후 정한다.
-- 목표 2단계 가입에서는 이메일 인증 대기 행을 비밀번호 없이 만들 수 있으므로 `password_hash`는 대기 중 nullable이고, LOCAL 사용자의 `ACTIVE` 전환 시에는 필수다.
 - 비밀번호 제품 정책은 `^(?=.*[A-Za-z])(?=.*\d)(?=\S{8,64}$).+$`이며 특수문자를 강제하지 않는다.
-- `PENDING_ACTIVATION`은 이메일 인증 전과 인증 후 공통 가입정보 완료 전을 모두 포함할 수 있다. `ACTIVE`는 자체가입 기준 `password_hash`, `email_verified_at`, 닉네임과 필수 동의 이력, `activated_at`을 모두 보유해야 한다.
-- 인증 대기 계정 정리 작업이 정해지면 `(status, created_at)` 인덱스를 추가한다. 단순 상태 조회만을 위한 단일 인덱스는 두지 않는다.
+- 이메일 인증과 프로필 입력 중에는 사용자 행이 없다. 최종 가입 트랜잭션은 `password_hash`, `email_verified_at`, 닉네임, 두 필수 동의의 버전·시각과 `activated_at`을 모두 가진 `ACTIVE` 행만 생성한다.
+- V3 전환 마이그레이션은 기존 사용자에게 확인되지 않은 동의 값을 채우지 않으므로 새 프로필·동의 컬럼을 물리적으로 nullable로 추가한다. 위 필드의 신규 가입 필수 조건은 애플리케이션이 즉시 강제하고, 기존 데이터의 실제 동의 근거를 확보한 뒤 별도 감사 가능한 마이그레이션으로 `NOT NULL`을 적용한다.
 
 ## Redis: 이메일 인증 상태
 
-이메일 인증용 DB 테이블을 만들지 않는다. 사용자 행을 `PENDING_ACTIVATION`으로 먼저 커밋한 뒤 Redis 상태를 생성하므로 DB와 Redis를 한 트랜잭션처럼 묶지 않는다. Redis 저장이나 메일 발송이 실패하면 재발송 요청이 사용자 ID 기준 상태를 다시 만들 수 있다.
+이메일 인증용 DB 테이블이나 미완료 사용자 행을 만들지 않는다. 정규화 이메일의 keyed digest를 Redis 식별자로 사용하며 Redis 저장이나 메일 발송이 실패하면 사용자 행 롤백이나 정리가 필요하지 않다.
 
 제안 key와 값:
 
 ```text
-key: auth:email-verification:user:{userId}
+key: auth:email-verification:email:{emailKey}
 value: codeDigest, attemptCount, issuedAt, resendAvailableAt
 TTL: 10분 제안
 ```
 
 - 코드는 alphabet `ABCDEFGHJKMNPQRSTUVWXYZ23456789`에서 `SecureRandom`으로 6자리를 생성한다.
-- 6자리 코드는 전수대입 공간이 작으므로 단순 SHA digest가 아니라 서버 비밀키 기반 `HMAC-SHA-256("EMAIL_VERIFICATION:" + userId + ":" + code)` 또는 동등하게 purpose·user ID로 domain separation된 keyed digest만 저장한다.
+- `emailKey`는 정규화 이메일의 서버 비밀키 기반 digest다. 6자리 코드는 전수대입 공간이 작으므로 단순 SHA digest가 아니라 `HMAC-SHA-256("EMAIL_VERIFICATION:" + emailKey + ":" + code)` 또는 동등하게 purpose와 이메일 식별자로 domain separation된 keyed digest만 저장한다.
 - 제출 코드는 trim 후 uppercase하고 6자리 alphabet을 검증한 다음 digest를 계산한다.
-- Redis key와 값에 이메일 원문·코드 원문을 넣지 않는다. 이메일 기반 보조 제한 키가 필요하면 `normalized_email`의 keyed digest를 사용한다.
+- 이메일 인증 코드 상태의 Redis key와 값에는 이메일·코드 원문을 넣지 않는다. 이메일 기반 식별자와 제한 키에는 `normalized_email`의 keyed digest를 사용한다.
 - 검증 실패 횟수 증가는 Lua 또는 동등한 원자 연산으로 수행하고, 5회 실패 시 key를 폐기하는 정책을 제안한다.
 - 재발송은 60초 간격을 제안하며, 허용된 재발송은 새 digest로 원자 교체해 이전 코드를 즉시 무효화한다.
 - 메일 전달이 실패하면 발송하려던 digest가 Redis의 현재 `codeDigest`와 일치할 때만 Lua compare-and-remove로 상태를 삭제한다. 따라서 해당 요청의 cooldown은 해제되어 즉시 재시도할 수 있고, 동시에 더 새 코드가 발급된 경우 그 상태를 잘못 삭제하지 않는다.
-- 코드 일치 시 `email_verified_at`을 기록하고 최종 가입에 사용할 짧은 수명의 불투명한 가입 계속 자격을 발급한다. 이 단계에서는 사용자를 활성화하지 않는다.
-- 가입 계속 자격은 정규화 이메일 또는 내부 사용자 ID와 이메일 인증 결과에 묶고 Redis에 TTL로 저장한다. 원문은 DB·로그·분석 사건에 남기지 않으며 가입 완료 후 재사용할 수 없다. 정확한 TTL과 응답 유실 복구 정책은 서버 구현 전에 확정한다.
+- 코드 일치 시 사용자 행을 만들지 않고 UUID v4 `signUpToken`을 발급한다. 클라이언트에는 원문을 한 번 반환하고 서버는 SHA-256 digest를 Redis key로 사용한다.
+- 가입 계속 자격 값에는 최종 사용자 생성에 필요한 정규화 이메일, 표시 이메일과 인증 시각을 저장하고 TTL은 15분이다. `signUpToken` 원문은 DB·Redis·로그·분석 사건에 남기지 않으며 가입 완료 후 재사용할 수 없다.
 
-## `user_term_agreements` 목표 구조
+## 사용자 행의 필수 약관 동의
 
-현재 생성·구현 대상은 아니지만 가입 완료 서버 작업에서 함께 도입해야 하는 목표 구조다.
-
-| 필드 | 제안 타입 | null | 규칙 |
-| --- | --- | --- | --- |
-| `id` | `BIGINT` | 아니요 | PK, identity |
-| `user_id` | `BIGINT` | 아니요 | FK → `users.id` |
-| `terms_id` | `VARCHAR(64)` | 아니요 | 약관 종류의 안정적인 식별자 |
-| `terms_version` | `VARCHAR(64)` | 아니요 | 사용자가 동의한 전문의 버전 |
-| `agreed_at` | `TIMESTAMP(6)` | 아니요 | 동의가 확정된 시각 |
-| `created_at` | `TIMESTAMP(6)` | 아니요 | 이력 생성 시각 |
-
-- `UNIQUE(user_id, terms_id, terms_version)`로 같은 버전의 중복 이력을 막는다.
-- 가입 완료 시 필요한 필수 약관의 식별자와 버전이 모두 기록돼야 사용자를 활성화한다.
-- 마케팅 수신 동의는 실제 기능과 목적이 승인되기 전에는 필드나 임시 행을 만들지 않는다.
+- MVP는 별도 약관 이력 테이블을 만들지 않는다. `users` 행의 서비스 이용약관과 개인정보 수집·이용 동의 버전·시각 필드를 가입 완료와 같은 트랜잭션에서 채운다.
+- API가 받은 `SERVICE_TERMS`, `PRIVACY_COLLECTION` 식별자는 각각 고정된 사용자 필드에 대응한다. 서버가 승인한 현재 버전과 정확히 일치하지 않거나 하나라도 빠지면 사용자 행을 만들지 않는다.
+- 마케팅 수신 동의는 실제 기능과 목적이 승인되기 전에는 필드를 만들지 않는다. 필수 약관 종류가 늘거나 재동의 이력이 필요해지면 별도 이력 모델을 다시 설계한다.
 
 ## Redis: Refresh Token RTR 상태
 
@@ -127,13 +118,13 @@ auth:refresh-used:{sessionId}:{tokenDigest}
 ### 사용자
 
 ```text
-PENDING_ACTIVATION ── 6자리 이메일 코드 검증 성공 ──> PENDING_ACTIVATION(email verified)
-PENDING_ACTIVATION(email verified) ── 닉네임·필수 동의 완료 ──> ACTIVE + session
+사용자 행 없음 ── 이메일 코드 검증 성공 ──> Redis signUpToken(15분)
+Redis signUpToken ── 닉네임·비밀번호·필수 동의 완료 ──> ACTIVE 사용자 생성 + session
 ACTIVE ── 운영 정책 ──> SUSPENDED ── 해제 ──> ACTIVE
 ACTIVE 또는 SUSPENDED ── 탈퇴 ──> WITHDRAWN
 ```
 
-- 인증 코드가 만료돼도 사용자는 `PENDING_ACTIVATION`을 유지하며 새 코드를 요청할 수 있다.
+- 인증 코드나 `signUpToken`이 만료돼도 DB 사용자 행은 남지 않으며 새 코드를 요청해 다시 시작할 수 있다.
 - `WITHDRAWN` 복구와 물리 삭제 여부는 데이터 삭제 정책이 정해지기 전 확정하지 않는다.
 
 ## 향후 추가 제안: `social_accounts`
@@ -167,4 +158,9 @@ ACTIVE 또는 SUSPENDED ── 탈퇴 ──> WITHDRAWN
 - Refresh Token의 최종 절대 수명과 여러 기기 세션 한도 (Access Token은 5분으로 확정)
 - 법률 검토가 끝난 약관 식별자·버전과 전문, 동의 철회 및 보존 정책
 - 닉네임 변경 이력·재사용 대기시간과 금칙어 정책
-- 가입 계속 자격의 정확한 TTL과 최종 가입 응답 유실 복구 방식
+
+## 변경 이력
+
+| 날짜 | 변경 | 결정자 |
+| --- | --- | --- |
+| 2026-08-21 | 이메일 인증 중 사용자 행을 만들지 않고, 최종 ACTIVE 생성·UUID 가입 자격·단일 닉네임·사용자 행 필수 동의 저장으로 계약 변경 | 사용자 요청 |

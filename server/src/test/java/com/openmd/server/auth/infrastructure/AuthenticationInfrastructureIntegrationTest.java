@@ -11,6 +11,8 @@ import com.openmd.server.auth.application.EmailVerificationStore;
 import com.openmd.server.auth.application.IssuedRefreshToken;
 import com.openmd.server.auth.application.RefreshSessionStore;
 import com.openmd.server.auth.application.RefreshTokenService;
+import com.openmd.server.auth.application.SignUpCredential;
+import com.openmd.server.auth.application.SignUpTokenDigest;
 import com.openmd.server.auth.domain.AuthErrorCode;
 import com.openmd.server.auth.domain.User;
 import com.openmd.server.auth.domain.UserRepository;
@@ -90,7 +92,7 @@ class AuthenticationInfrastructureIntegrationTest {
 	@Test
 	void appliesFlywayMigrationAndEnforcesHibernateUniqueAndCheckContractsOnMySql84() {
 		Integer migrationSucceeded = jdbcTemplate.queryForObject(
-			"SELECT success FROM flyway_schema_history WHERE version = '1'",
+			"SELECT success FROM flyway_schema_history WHERE version = '3'",
 			Integer.class
 		);
 		assertEquals(1, migrationSucceeded);
@@ -114,6 +116,40 @@ class AuthenticationInfrastructureIntegrationTest {
 			  email, normalized_email, password_hash, status, created_at, updated_at
 			) VALUES (?, ?, ?, 'ACTIVE', CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6))
 			""", "invalid@example.com", "invalid@example.com", "$argon2id$invalid-hash"));
+
+		int legacyActiveRows = jdbcTemplate.update("""
+			INSERT INTO users (
+			  email, normalized_email, password_hash, email_verified_at,
+			  status, activated_at, created_at, updated_at
+			) VALUES (?, ?, ?, CURRENT_TIMESTAMP(6), 'ACTIVE', CURRENT_TIMESTAMP(6),
+			  CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6))
+			""", "legacy@example.com", "legacy@example.com", "$argon2id$legacy-hash");
+		assertEquals(1, legacyActiveRows, "V3 must preserve pre-existing ACTIVE rows without fabricated consent");
+
+		Instant now = Instant.parse("2026-08-21T00:00:00Z");
+		User active = userRepository.saveAndFlush(User.active(
+			"study@example.com",
+			"study@example.com",
+			"$argon2id$study-hash",
+			"Study7",
+			now.minusSeconds(30),
+			"TEMP-2026-08-20",
+			"TEMP-2026-08-20",
+			now
+		));
+		assertEquals("Study7", active.getNickname());
+		assertThrows(DataIntegrityViolationException.class, () -> jdbcTemplate.update("""
+			INSERT INTO users (
+			  email, normalized_email, password_hash, nickname, email_verified_at,
+			  service_terms_version, service_terms_agreed_at,
+			  privacy_terms_version, privacy_terms_agreed_at,
+			  status, activated_at, created_at, updated_at
+			) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP(6), ?, CURRENT_TIMESTAMP(6), ?, CURRENT_TIMESTAMP(6),
+			  'ACTIVE', CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6))
+			""",
+			"other-study@example.com", "other-study@example.com", "$argon2id$other-hash", "study7",
+			"TEMP-2026-08-20", "TEMP-2026-08-20"
+		));
 	}
 
 	@Test
@@ -122,27 +158,28 @@ class AuthenticationInfrastructureIntegrationTest {
 		Instant now = Instant.now();
 		Duration ttl = Duration.ofSeconds(20);
 		Duration cooldown = Duration.ofSeconds(60);
-		String key = RedisEmailVerificationStore.key(42L);
+		String emailKey = "email-key-42";
+		String key = RedisEmailVerificationStore.key(emailKey);
 
-		assertTrue(store.issue(42L, "digest-one", now, ttl, cooldown, false).issued());
+		assertTrue(store.issue(emailKey, "digest-one", now, ttl, cooldown, false).issued());
 		assertTtlWithin(key, ttl);
 		assertEquals("digest-one", redisTemplate.opsForHash().get(key, "codeDigest"));
 
 		EmailVerificationStore.IssueResult limited = store.issue(
-			42L, "digest-two", now.plusSeconds(30), ttl, cooldown, true
+			emailKey, "digest-two", now.plusSeconds(30), ttl, cooldown, true
 		);
 		assertFalse(limited.issued());
 		assertEquals(30L, limited.retryAfterSeconds());
 		assertEquals("digest-one", redisTemplate.opsForHash().get(key, "codeDigest"));
 
-		assertTrue(store.issue(42L, "digest-two", now.plusSeconds(61), ttl, cooldown, true).issued());
+		assertTrue(store.issue(emailKey, "digest-two", now.plusSeconds(61), ttl, cooldown, true).issued());
 		assertEquals("digest-two", redisTemplate.opsForHash().get(key, "codeDigest"));
-		assertEquals(EmailVerificationStore.VerificationResult.MATCHED, store.verify(42L, "digest-two"));
+		assertEquals(EmailVerificationStore.VerificationResult.MATCHED, store.verify(emailKey, "digest-two"));
 
 		for (int attempt = 1; attempt <= 4; attempt++) {
-			assertEquals(EmailVerificationStore.VerificationResult.MISMATCHED, store.verify(42L, "wrong"));
+			assertEquals(EmailVerificationStore.VerificationResult.MISMATCHED, store.verify(emailKey, "wrong"));
 		}
-		assertEquals(EmailVerificationStore.VerificationResult.EXPIRED, store.verify(42L, "wrong"));
+		assertEquals(EmailVerificationStore.VerificationResult.EXPIRED, store.verify(emailKey, "wrong"));
 		assertFalse(Boolean.TRUE.equals(redisTemplate.hasKey(key)));
 	}
 
@@ -150,19 +187,43 @@ class AuthenticationInfrastructureIntegrationTest {
 	void cancelsOnlyTheFailedMailIssueAndImmediatelyReleasesItsCooldownInRedis74() {
 		RedisEmailVerificationStore store = new RedisEmailVerificationStore(redisTemplate);
 		Instant now = Instant.now();
-		String key = RedisEmailVerificationStore.key(43L);
+		String emailKey = "email-key-43";
+		String key = RedisEmailVerificationStore.key(emailKey);
 
 		assertTrue(store.issue(
-			43L, "delivered-by-newer-request", now, Duration.ofMinutes(10), Duration.ofSeconds(60), false
+			emailKey, "delivered-by-newer-request", now, Duration.ofMinutes(10), Duration.ofSeconds(60), false
 		).issued());
-		assertFalse(store.cancelIssue(43L, "stale-failed-digest"));
+		assertFalse(store.cancelIssue(emailKey, "stale-failed-digest"));
 		assertTrue(Boolean.TRUE.equals(redisTemplate.hasKey(key)));
 
-		assertTrue(store.cancelIssue(43L, "delivered-by-newer-request"));
+		assertTrue(store.cancelIssue(emailKey, "delivered-by-newer-request"));
 		assertFalse(Boolean.TRUE.equals(redisTemplate.hasKey(key)));
 		assertTrue(store.issue(
-			43L, "retry-digest", now.plusSeconds(1), Duration.ofMinutes(10), Duration.ofSeconds(60), true
+			emailKey, "retry-digest", now.plusSeconds(1), Duration.ofMinutes(10), Duration.ofSeconds(60), true
 		).issued());
+	}
+
+	@Test
+	void storesSignUpCredentialAndItsFifteenMinuteTtlInOneAtomicLuaExecution() {
+		RedisSignUpCredentialStore store = new RedisSignUpCredentialStore(redisTemplate);
+		String rawToken = "61d67fa8-1a2b-4f35-94fc-16ec63551b15";
+		String tokenDigest = SignUpTokenDigest.create(rawToken);
+		Duration ttl = Duration.ofMinutes(15);
+		Instant verifiedAt = Instant.parse("2026-08-21T00:00:00Z");
+
+		store.save(tokenDigest, new SignUpCredential(
+			"Learner@Example.COM", "learner@example.com", verifiedAt
+		), ttl);
+
+		String key = RedisSignUpCredentialStore.key(tokenDigest);
+		assertFalse(key.contains(rawToken));
+		assertTtlWithin(key, ttl);
+		assertEquals("learner@example.com", redisTemplate.opsForHash().get(key, "normalizedEmail"));
+		assertEquals(verifiedAt.toString(), redisTemplate.opsForHash().get(key, "verifiedAt"));
+		assertFalse(redisTemplate.opsForHash().entries(key).containsValue(rawToken));
+		assertEquals("learner@example.com", store.find(tokenDigest).orElseThrow().normalizedEmail());
+		store.consume(tokenDigest);
+		assertTrue(store.find(tokenDigest).isEmpty());
 	}
 
 	@Test

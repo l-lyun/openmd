@@ -26,6 +26,7 @@
 | 자체 로그인 | [01-local-auth.md](features/01-local-auth.md) | 초안 |
 | 사용자·인증 데이터 | [authentication.md](contracts/data/authentication.md) | 초안 |
 | 인증 API | [authentication.md](contracts/api/authentication.md) | 초안 |
+| 2단계 이메일 회원가입 서버 설계 | [two-step-signup.md](../server/docs/technical/two-step-signup.md) | 구현됨 |
 | 브라우저 Refresh Token Cookie 서버 설계 | [browser-refresh-cookie.md](../server/docs/technical/browser-refresh-cookie.md) | 초안 |
 | 서버 OpenAPI와 Swagger UI 운영 | [openapi-documentation.md](../server/docs/technical/openapi-documentation.md) | 초안 |
 | 학습자료 만들기 | [02-content-import.md](features/02-content-import.md) | 검토 중 |

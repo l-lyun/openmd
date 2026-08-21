@@ -12,7 +12,10 @@ import java.time.Instant;
 @Entity
 @Table(
 	name = "users",
-	uniqueConstraints = @UniqueConstraint(name = "uk_users_normalized_email", columnNames = "normalized_email")
+	uniqueConstraints = {
+		@UniqueConstraint(name = "uk_users_normalized_email", columnNames = "normalized_email"),
+		@UniqueConstraint(name = "uk_users_nickname", columnNames = "nickname")
+	}
 )
 public class User extends BaseEntity {
 
@@ -24,6 +27,9 @@ public class User extends BaseEntity {
 
 	@Column(name = "password_hash", nullable = false, length = 255)
 	private String passwordHash;
+
+	@Column(length = 10)
+	private String nickname;
 
 	@Column(name = "email_verified_at")
 	private Instant emailVerifiedAt;
@@ -41,6 +47,18 @@ public class User extends BaseEntity {
 	@Column(name = "withdrawn_at")
 	private Instant withdrawnAt;
 
+	@Column(name = "service_terms_version", length = 64)
+	private String serviceTermsVersion;
+
+	@Column(name = "service_terms_agreed_at")
+	private Instant serviceTermsAgreedAt;
+
+	@Column(name = "privacy_terms_version", length = 64)
+	private String privacyTermsVersion;
+
+	@Column(name = "privacy_terms_agreed_at")
+	private Instant privacyTermsAgreedAt;
+
 	protected User() {
 	}
 
@@ -53,6 +71,28 @@ public class User extends BaseEntity {
 
 	public static User pending(String email, String normalizedEmail, String passwordHash) {
 		return new User(email, normalizedEmail, passwordHash);
+	}
+
+	public static User active(
+		String email,
+		String normalizedEmail,
+		String passwordHash,
+		String nickname,
+		Instant emailVerifiedAt,
+		String serviceTermsVersion,
+		String privacyTermsVersion,
+		Instant now
+	) {
+		User user = new User(email, normalizedEmail, passwordHash);
+		user.nickname = nickname;
+		user.emailVerifiedAt = emailVerifiedAt;
+		user.serviceTermsVersion = serviceTermsVersion;
+		user.serviceTermsAgreedAt = now;
+		user.privacyTermsVersion = privacyTermsVersion;
+		user.privacyTermsAgreedAt = now;
+		user.status = UserStatus.ACTIVE;
+		user.activatedAt = now;
+		return user;
 	}
 
 	public void activate(Instant now) {
@@ -70,9 +110,14 @@ public class User extends BaseEntity {
 	public String getEmail() { return email; }
 	public String getNormalizedEmail() { return normalizedEmail; }
 	public String getPasswordHash() { return passwordHash; }
+	public String getNickname() { return nickname; }
 	public Instant getEmailVerifiedAt() { return emailVerifiedAt; }
 	public UserStatus getStatus() { return status; }
 	public Instant getActivatedAt() { return activatedAt; }
 	public Instant getSuspendedAt() { return suspendedAt; }
 	public Instant getWithdrawnAt() { return withdrawnAt; }
+	public String getServiceTermsVersion() { return serviceTermsVersion; }
+	public Instant getServiceTermsAgreedAt() { return serviceTermsAgreedAt; }
+	public String getPrivacyTermsVersion() { return privacyTermsVersion; }
+	public Instant getPrivacyTermsAgreedAt() { return privacyTermsAgreedAt; }
 }

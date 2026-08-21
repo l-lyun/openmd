@@ -16,11 +16,18 @@ public final class VerificationCodeDigest {
 		this.secret = secret.clone();
 	}
 
-	public String create(long userId, String code) {
+	public String emailKey(String normalizedEmail) {
+		return hmac("EMAIL_KEY:" + normalizedEmail);
+	}
+
+	public String create(String emailKey, String code) {
+		return hmac("EMAIL_VERIFICATION:" + emailKey + ":" + code);
+	}
+
+	private String hmac(String value) {
 		try {
 			Mac mac = Mac.getInstance("HmacSHA256");
 			mac.init(new SecretKeySpec(secret, "HmacSHA256"));
-			String value = "EMAIL_VERIFICATION:" + userId + ":" + code;
 			return HexFormat.of().formatHex(mac.doFinal(value.getBytes(StandardCharsets.UTF_8)));
 		} catch (Exception exception) {
 			throw new IllegalStateException("Unable to calculate verification digest", exception);

@@ -2,6 +2,7 @@ package com.openmd.server.auth.api;
 
 import com.openmd.server.auth.application.AuthService;
 import com.openmd.server.auth.application.SessionTokens;
+import com.openmd.server.auth.application.TwoStepSignUpService;
 import com.openmd.server.auth.domain.AuthErrorCode;
 import com.openmd.server.auth.security.BrowserSessionRequestGuard;
 import com.openmd.server.global.api.ApiError;
@@ -34,11 +35,39 @@ public class BrowserAuthController {
 
 	private static final String BROWSER_REFRESH_COOKIE = "browserRefreshCookie";
 	private final AuthService authService;
+	private final TwoStepSignUpService signUpService;
 	private final BrowserRefreshCookie refreshCookie;
 
-	public BrowserAuthController(AuthService authService, BrowserRefreshCookie refreshCookie) {
+	public BrowserAuthController(
+		AuthService authService,
+		TwoStepSignUpService signUpService,
+		BrowserRefreshCookie refreshCookie
+	) {
 		this.authService = authService;
+		this.signUpService = signUpService;
 		this.refreshCookie = refreshCookie;
+	}
+
+	@PostMapping("/sign-ups")
+	@Operation(
+		operationId = "completeBrowserSignUp",
+		summary = "브라우저 회원가입을 완료하고 세션을 발급한다",
+		responses = @io.swagger.v3.oas.annotations.responses.ApiResponse(
+			responseCode = "201", description = "가입 완료", useReturnTypeSchema = true
+		)
+	)
+	@Parameter(
+		name = BrowserSessionRequestGuard.CSRF_HEADER,
+		description = "브라우저 인증 요청의 preflight를 강제하는 고정값",
+		in = ParameterIn.HEADER,
+		required = true,
+		example = "1",
+		schema = @Schema(allowableValues = "1")
+	)
+	public ResponseEntity<ApiResponse<BrowserSessionTokens>> signUp(
+		@Valid @RequestBody SignUpRequest request
+	) {
+		return browserSessionResponse(signUpService.completeSignUp(request.toCommand()), HttpStatus.CREATED);
 	}
 
 	@PostMapping("/sessions")
@@ -55,7 +84,7 @@ public class BrowserAuthController {
 		@Valid @RequestBody LoginRequest request
 	) {
 		SessionTokens tokens = authService.login(request.email(), request.password());
-		return browserSessionResponse(tokens);
+		return browserSessionResponse(tokens, HttpStatus.OK);
 	}
 
 	@PostMapping("/sessions/refresh")
@@ -78,7 +107,7 @@ public class BrowserAuthController {
 			return invalidRefreshResponse();
 		}
 		try {
-			return browserSessionResponse(authService.refresh(token));
+			return browserSessionResponse(authService.refresh(token), HttpStatus.OK);
 		} catch (BusinessException exception) {
 			if (exception.getErrorCode() == AuthErrorCode.INVALID_CREDENTIAL) {
 				return invalidRefreshResponse();
@@ -113,13 +142,16 @@ public class BrowserAuthController {
 		}
 	}
 
-	private ResponseEntity<ApiResponse<BrowserSessionTokens>> browserSessionResponse(SessionTokens tokens) {
+	private ResponseEntity<ApiResponse<BrowserSessionTokens>> browserSessionResponse(
+		SessionTokens tokens,
+		HttpStatus status
+	) {
 		BrowserSessionTokens body = new BrowserSessionTokens(
 			tokens.accessToken(),
 			tokens.accessExpiresAt(),
 			tokens.refreshExpiresAt()
 		);
-		return ResponseEntity.ok()
+		return ResponseEntity.status(status)
 			.header(HttpHeaders.SET_COOKIE, refreshCookie.issue(tokens.refreshToken(), tokens.refreshExpiresAt()).toString())
 			.body(ApiResponse.success(body));
 	}

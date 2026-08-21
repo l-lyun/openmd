@@ -6,7 +6,7 @@
 - 관련 기능명세: [이메일 기반 자체 인증](../../features/01-local-auth.md)
 - 관련 데이터: [사용자·인증 데이터](../data/authentication.md)
 - 관련 웹 설계: [웹 인증 상태·토큰·API 통합 설계](../../../web/docs/technical/authentication.md)
-- 전환 상태: 서버의 브라우저 HttpOnly Cookie 계약 구현 완료, 웹 클라이언트 전환 전
+- 전환 상태: 브라우저 HttpOnly Cookie와 2단계 회원가입 서버 구현 완료, 웹 1단계 인증 메일 호출 전환 필요
 
 ## 목적
 
@@ -14,9 +14,9 @@
 
 ## 회원가입 계약 전환 상태
 
-- 아래의 2단계 회원가입 계약은 2026-08-20 승인된 목표 계약이며 아직 서버에 구현되지 않았다.
-- 현재 서버는 `POST /api/v1/auth/sign-ups`에서 이메일과 비밀번호로 대기 사용자를 만들고, 이메일 인증 완료 시 즉시 `ACTIVE`로 전환한 뒤 `nextAction=LOGIN`을 반환한다.
-- 목표 계약은 이메일 인증 완료를 가입 계속 자격으로 바꾸고, 닉네임·필수 동의의 최종 제출과 세션 발급을 한 작업으로 묶는다. 구현 PR은 기존 소비자 영향과 endpoint 전환 방식을 별도로 검토해야 한다.
+- 아래의 2단계 회원가입 계약은 서버에 구현됐다. 인증 메일은 `POST /api/v1/auth/email-verifications`, 최종 네이티브 가입은 `POST /api/v1/auth/sign-ups`, 최종 브라우저 가입은 `POST /api/v1/auth/web/sign-ups`를 사용한다.
+- 기존의 “`POST /api/v1/auth/sign-ups`에서 대기 사용자 생성” 계약은 서버에서 제거됐다. 현재 웹 1단계 호출은 아직 기존 경로와 email+password body를 사용하므로 서버와 함께 배포하기 전에 인증 메일 endpoint로 전환하고 개발 우회를 제거해야 한다.
+- 이메일 인증 완료는 가입 계속 자격을 발급하고, 닉네임·필수 동의의 최종 제출과 세션 발급은 최종 가입 endpoint가 처리한다.
 - 향후 소셜 가입의 미완료 상태, 재진입과 `social_accounts` 계약은 소셜 로그인 서버 작업에서 확정하며 이 문서의 현재 구현 범위가 아니다.
 
 ## 공통 규칙
@@ -121,7 +121,7 @@
   "success": true,
   "data": {
     "emailVerified": true,
-    "signUpToken": "<redacted>",
+    "signUpToken": "61d67fa8-1a2b-4f35-94fc-16ec63551b15",
     "nextAction": "COMPLETE_PROFILE"
   },
   "error": null
@@ -131,7 +131,8 @@
 - `code`는 trim 후 uppercase하고 alphabet `ABCDEFGHJKMNPQRSTUVWXYZ23456789`에 속하는 정확히 6자리인지 확인한다.
 - 서버는 이메일 인증 상태의 keyed digest, TTL, 실패 횟수를 원자적으로 검증한다.
 - 잘못된 코드 검증은 실패 횟수를 원자적으로 증가시키고, 5회 실패하면 현재 코드를 무효화한다.
-- `signUpToken`은 이메일 인증 결과에 묶인 짧은 수명의 불투명한 가입 계속 자격이다. URL·로그·분석 사건에 넣지 않고 최종 가입 완료 후 재사용할 수 없다.
+- `signUpToken`은 `UUID.randomUUID()`로 만든 UUID v4이며 이메일 인증 결과에 묶인 15분 수명의 일회성 가입 계속 자격이다. 서버는 원문 대신 SHA-256 digest와 정규화·표시 이메일, 인증 시각을 Redis에 저장한다.
+- 클라이언트는 `signUpToken`을 메모리에서만 보관한다. URL·로그·분석 사건·DB·`localStorage`·`sessionStorage`에 넣지 않으며 새로고침, 앱 종료, 만료 또는 새 이메일 인증으로 잃거나 무효화되면 이메일 인증부터 다시 진행한다.
 - 이메일 가입 클라이언트는 비밀번호 확인 값을 전송하지 않는다. 1단계에서 확인한 비밀번호 하나를 최종 가입 완료 요청에만 전송한다.
 
 ## 닉네임 사용 가능 확인
@@ -156,7 +157,7 @@
 ```
 
 - 닉네임은 화면에 보이는 글자 기준 2~10자이고 공백 없이 한글·영문·숫자만 허용한다.
-- 비교 전에 한글 표현을 일관되게 정규화하고 영문은 대소문자를 구분하지 않는다. 저장용 표시 값과 비교용 정규화 값을 구분한다.
+- 서버는 닉네임을 NFC로 정규화한 뒤 같은 단일 값을 표시와 저장에 사용한다. 별도 비교용 컬럼을 만들지 않고 대소문자를 구분하지 않는 DB collation과 `UNIQUE(nickname)`으로 영문 대소문자 차이와 동시 선점을 차단한다.
 - `available=true`는 예약이나 소유권 획득이 아니다. 클라이언트는 `checkedNickname`과 현재 입력이 같을 때만 확인 완료로 취급하고, 입력 변경 즉시 결과를 폐기한다.
 
 ## 가입 완료와 세션 발급
@@ -167,20 +168,21 @@
 
 ```json
 {
-  "signUpToken": "<redacted>",
+  "signUpToken": "61d67fa8-1a2b-4f35-94fc-16ec63551b15",
   "password": "<redacted>",
   "nickname": "공부왕7",
   "agreements": [
-    { "termsId": "SERVICE_TERMS", "version": "MVP_PLACEHOLDER" },
-    { "termsId": "PRIVACY_COLLECTION", "version": "MVP_PLACEHOLDER" }
+    { "termsId": "SERVICE_TERMS", "version": "TEMP-2026-08-20" },
+    { "termsId": "PRIVACY_COLLECTION", "version": "TEMP-2026-08-20" }
   ]
 }
 ```
 
 - `password`: 이메일 가입에만 필수이며 8~64자, 영문자·숫자 각각 1자 이상, 공백 불가, 특수문자 선택이다. 비밀번호 확인 값은 전송하지 않는다.
-- `agreements`는 단순 boolean이 아니라 사용자가 동의한 약관 식별자와 버전의 목록이다. 예시의 `MVP_PLACEHOLDER`는 프론트엔드 임시 전문용 값이며 법률 검토가 끝난 운영 약관 버전으로 간주하지 않는다.
+- `agreements`는 단순 boolean이 아니라 사용자가 동의한 약관 식별자와 버전의 목록이다. 예시의 `TEMP-2026-08-20`은 현재 프론트엔드 임시 전문용 값이며 법률 검토가 끝난 운영 약관 버전으로 간주하지 않는다.
 - 서버는 가입 계속 자격, 닉네임 형식·전역 중복과 필수 약관의 식별자·버전을 최종 요청에서 다시 검증한다.
-- 성공 시 사용자를 `ACTIVE`로 전환하고 네이티브 endpoint는 로그인과 같은 세션 body를, 브라우저 endpoint는 Access Token body와 HttpOnly Refresh Token Cookie를 발급한다.
+- 서버가 허용한 서비스 이용약관과 개인정보 수집·이용 동의의 버전과 서버 시각의 동의 시각은 별도 이력 테이블 없이 새 사용자 행에 각각 저장한다.
+- 성공 시 `ACTIVE` 사용자 행을 처음 생성한다. 네이티브 endpoint는 로그인과 같은 세션 body를, 브라우저 endpoint는 Access Token body와 HttpOnly Refresh Token Cookie를 발급한다.
 - 성공한 클라이언트의 다음 목적지는 `HOME`이다.
 - 닉네임 중복 확인 이후 선점된 경우 `409 AUTH_010`으로 거절하며, 클라이언트는 가입 계속 자격과 다른 입력·동의 상태를 보존하고 닉네임 재확인을 요구한다.
 
@@ -404,6 +406,8 @@ Origin/CSRF 검증 실패는 `403 AUTH_009`를 사용한다. 클라이언트는 
 | 조건 | HTTP 상태 | 안정적인 오류 코드 | 사용자 복구 |
 | --- | --- | --- | --- |
 | 필드 형식·비밀번호 정책 위반 | `400` | 기존 `COMMON_001` | 필드 수정 |
+| 가입 계속 자격 형식 위반 | `400` | 기존 `COMMON_001` | 이메일 인증부터 다시 시작 |
+| 가입 계속 자격 없음·만료·사용됨 | `401` | 기존 `AUTH_005` | 이메일 인증부터 다시 시작 |
 | 이메일 인증 코드 형식·값 오류 또는 사용됨 | `400` | `AUTH_003` | 남은 횟수 내 재입력 또는 새 코드 요청 |
 | 이메일 인증 코드 만료·시도 소진 | `410` | `AUTH_004` | 새 코드 요청 |
 | 닉네임 형식 위반·필수 약관 누락 | `400` | 기존 `COMMON_001` | 표시된 필드 수정 |
@@ -417,34 +421,36 @@ Origin/CSRF 검증 실패는 `403 AUTH_009`를 사용한다. 클라이언트는 
 ## 보안과 개인정보
 
 - 비밀번호 해시는 Argon2id를 사용한다.
-- 6자리 코드는 `SecureRandom`으로 만들고 Redis에는 서버 비밀키 기반 `HMAC-SHA-256("EMAIL_VERIFICATION:" + userId + ":" + code)` 또는 동등하게 domain separation된 keyed digest만 저장한다.
+- 6자리 코드는 `SecureRandom`으로 만들고 Redis에는 서버 비밀키 기반 `HMAC-SHA-256("EMAIL_VERIFICATION:" + emailKey + ":" + code)` 또는 동등하게 정규화 이메일의 keyed digest와 purpose로 domain separation된 digest만 저장한다.
+- `signUpToken`은 Java의 `UUID.randomUUID()`로 만들고 Redis key에는 원문 대신 SHA-256 digest를 사용한다. 원문과 digest를 인증·세션 로그에 남기지 않는다.
 - Refresh Token의 session ID와 secret은 충분히 무작위로 만들고 Redis에는 secret의 SHA-256 digest만 저장한다. session ID는 조회 경로일 뿐 신뢰하지 않는다.
 - 재발송 60초 제한 외의 IP·기기 단위 요청 제한은 운영 정책 확정 후 추가한다. 이메일을 제한 로그 키로 남겨서는 안 된다.
 - 인증 성공/실패 로그에는 요청 추적 ID, 결과 코드와 필요한 최소 메타데이터만 남기고 이메일·비밀번호·토큰을 마스킹 또는 제외한다.
 - 허용 origin은 `OPENMD_CORS_ALLOWED_ORIGINS`로 설정하며 여러 origin은 쉼표로 구분한다. 기본 개발 origin은 `http://localhost:5173`이고 운영에서는 명시적으로 덮어쓴다.
-- 현재 구현의 body surface는 credentialed CORS를 사용하지 않는다. 제안한 브라우저 cookie surface를 도입할 때만 정확한 Origin, credentialed CORS와 CSRF 방어를 함께 적용한다.
+- 네이티브 body surface는 credentialed CORS를 사용하지 않는다. 구현된 브라우저 Cookie surface는 승인된 정확한 Origin의 credentialed CORS와 `X-OpenMD-CSRF` 검증을 함께 적용한다.
 - 네이티브 앱의 Refresh Token은 일반 로컬 저장소가 아니라 OS 보안 저장소에 보관한다.
 - 이메일 인증 코드와 Access/Refresh Token 원문을 로그, 분석 사건, Redis key/value에 남기지 않는다.
-- 가입 계속 자격 원문도 토큰과 동일하게 URL, 영속 클라이언트 저장소, DB, 로그와 분석 사건에 남기지 않는다.
+- 가입 계속 자격 원문도 토큰과 동일하게 URL, 영속 클라이언트 저장소, DB, 로그와 분석 사건에 남기지 않는다. 웹 클라이언트는 메모리에서만 보관한다.
 
 ## 재시도와 중복 요청
 
-- 인증 메일 요청과 가입 완료 재시도는 정규화 이메일 unique 제약을 기준으로 사용자를 중복 생성하지 않는다.
+- 인증 메일 요청은 사용자 행을 만들지 않는다. 가입 완료는 정규화 이메일과 닉네임의 unique 제약을 기준으로 사용자를 중복 생성하지 않는다.
 - 인증 메일 재발송은 요청 한도 안에서 새 코드를 만들고 Redis의 이전 코드를 무효화한다.
-- 이메일 인증 완료와 로그아웃은 네트워크 응답 유실 뒤 재시도해도 계정·세션 상태를 중복 전이하지 않는다. 가입 완료 응답 유실 시 세션 원문을 그대로 재전달할지 로그인으로 복구할지는 구현 전 확정한다.
+- 이메일 인증 완료와 로그아웃은 네트워크 응답 유실 뒤 재시도해도 계정·세션 상태를 중복 전이하지 않는다.
+- 최종 가입 응답 유실 시 브라우저는 Cookie 도착 여부를 확인하기 위해 refresh를 한 번 호출한다. 성공하면 복구된 세션을 사용하고, `401 AUTH_005`이면 가입 완료를 반복하지 않고 로그인한다. 네이티브는 세션 body를 잃으면 로그인으로 복구한다.
 - 갱신은 회전 때문에 일반적인 멱등 요청이 아니다. 소비자는 동시에 하나만 호출하고 실패 시 이전 자격을 무한 재시도하지 않는다.
 
-## 단계적 전환과 호환성 — 제안
+## 단계적 전환과 호환성 — 현재 상태
 
-1. 기존 body endpoint와 DTO를 변경하지 않은 채 웹 전용 세션 endpoint, Cookie 설정과 계약 테스트를 추가한다.
-2. 서버가 Cookie 발급·회전·삭제, 정확한 Origin, credentialed CORS와 CSRF 검증을 모두 제공한 뒤에만 웹 클라이언트를 새 surface로 전환한다.
-3. 전환 기간에는 브라우저 응답에 Refresh Token body를 반환하거나, 같은 요청에서 body와 Cookie를 동시에 인증 근거로 받아들이는 호환 모드를 두지 않는다.
-4. 웹 배포 후 로그인·refresh·logout 성공률, `AUTH_005`, 재사용 탐지와 Origin/CSRF 거절을 토큰 원문 없이 관찰한다.
+1. 기존 네이티브 body endpoint와 DTO를 유지한 채 웹 전용 세션 endpoint, Cookie 설정과 계약 테스트를 추가했다.
+2. 서버의 Cookie 발급·회전·삭제, 정확한 Origin, credentialed CORS와 CSRF 검증을 확인한 뒤 웹 클라이언트를 브라우저 surface로 전환했다.
+3. 브라우저 응답에는 Refresh Token body를 반환하지 않고, 같은 요청에서 body와 Cookie를 동시에 인증 근거로 받아들이는 호환 모드를 두지 않는다.
+4. 로그인·refresh·logout 성공률, `AUTH_005`, 재사용 탐지와 Origin/CSRF 거절은 토큰 원문 없이 관찰한다.
 5. 네이티브 앱과 WebView 호출 경계가 확정되고 모든 소비자 마이그레이션이 끝난 뒤에만 기존 body surface의 폐기 여부를 별도 승인한다.
 
 롤백은 웹이 기존 body endpoint로 자동 fallback하는 방식이 아니다. 서버와 웹 배포를 이전 호환 버전으로 함께 되돌리되, 이미 발급된 Cookie와 Redis session은 만료·폐기 정책에 따라 정리한다. 자동 fallback은 Refresh Token을 다시 JavaScript에 노출해 전환 목적을 훼손한다.
 
-## 전환 수용 기준 — 제안
+## 브라우저 인증 운영 기준
 
 - 브라우저 로그인·refresh 성공 응답의 JSON, OpenAPI schema와 프론트 애플리케이션 상태 어디에도 Refresh Token 필드나 원문이 없다.
 - 로그인 성공 Cookie는 승인된 이름, `HttpOnly`, 환경에 맞는 `Secure`·`SameSite`, host-only, 승인된 Path와 Redis 절대 만료에 맞는 수명을 가진다.
@@ -467,3 +473,9 @@ Origin/CSRF 검증 실패는 `403 AUTH_009`를 사용한다. 클라이언트는 
 - 네이티브 앱과 WebView의 실제 호출 경계를 언제 확정하고 기존 body surface를 언제 폐기할지
 - 메일 발송을 비동기로 처리할 때 가입·재발송 상태 조회 API가 필요한지
 - 모든 기기 로그아웃 API의 초기 포함 여부
+
+## 변경 이력
+
+| 날짜 | 변경 | 결정자 |
+| --- | --- | --- |
+| 2026-08-21 | 최종 가입 시 ACTIVE 사용자 생성, UUID v4 가입 자격, 단일 닉네임 컬럼과 사용자 행 필수 동의 저장으로 목표 계약 갱신 | 사용자 요청 |

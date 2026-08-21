@@ -4,6 +4,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.openmd.server.auth.application.AuthService;
+import com.openmd.server.auth.application.TwoStepSignUpService;
 import com.openmd.server.auth.api.BrowserRefreshCookie;
 import com.openmd.server.auth.security.AccessTokenService;
 import com.openmd.server.learningmaterial.application.LearningMaterialService;
@@ -31,6 +32,7 @@ class OpenApiDisabledTest {
 
 	@Autowired MockMvc mockMvc;
 	@MockitoBean AuthService authService;
+	@MockitoBean TwoStepSignUpService signUpService;
 	@MockitoBean AccessTokenService accessTokenService;
 	@MockitoBean BrowserRefreshCookie browserRefreshCookie;
 	@MockitoBean LearningMaterialService learningMaterialService;

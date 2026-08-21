@@ -3,6 +3,7 @@ package com.openmd.server.auth.domain;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Table;
@@ -21,9 +22,15 @@ class UserMappingTest {
 		assertFalse(Arrays.stream(table.uniqueConstraints())
 			.map(UniqueConstraint::columnNames)
 			.noneMatch(columns -> Arrays.equals(columns, new String[]{"normalized_email"})));
+		assertFalse(Arrays.stream(table.uniqueConstraints())
+			.map(UniqueConstraint::columnNames)
+			.noneMatch(columns -> Arrays.equals(columns, new String[]{"nickname"})));
 
 		Field passwordHash = User.class.getDeclaredField("passwordHash");
 		assertFalse(passwordHash.getAnnotation(Column.class).nullable());
 		assertEquals(255, passwordHash.getAnnotation(Column.class).length());
+		Field nickname = User.class.getDeclaredField("nickname");
+		assertEquals(10, nickname.getAnnotation(Column.class).length());
+		assertThrows(NoSuchFieldException.class, () -> User.class.getDeclaredField("normalizedNickname"));
 	}
 }
